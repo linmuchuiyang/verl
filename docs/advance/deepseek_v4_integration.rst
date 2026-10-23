@@ -161,11 +161,15 @@ under verl's ``expert_parallel_size = TP x DP`` rule. Until
 https://github.com/verl-project/verl/pull/8234 is merged, vLLM 0.29 rejects the
 headless engines verl starts on the other nodes of a replica.
 
-**Memory.** With ``param_offload`` and ``optimizer_offload`` the GPU is not the
-constraint: the actor peaks at ~26 GB per H100 and 34-63 GB per GB200. The host
-is, because Megatron's HybridDeviceOptimizer keeps fp32 masters and Adam moments
-for every rank on the CPU (~12 bytes per parameter per rank, independent of DP).
-Three levers were needed:
+**Memory.** With ``param_offload`` and ``optimizer_offload`` the GPU is rarely
+the constraint: the actor peaks at ~26 GB per H100 (response 4096, EP8) and
+34-63 GB per GB200. The exception is response length 8192 on 80 GB GPUs, where
+stage 0 (embedding plus the three hash layers, ~11.6 B parameters at EP8) does
+not fit next to the ~17 GiB vLLM keeps resident after sleep; ``ACTOR_EP=16``
+(DP1) halves it. The host is the usual limit, because Megatron's
+HybridDeviceOptimizer keeps fp32 masters and Adam moments for every rank on the
+CPU (~12 bytes per parameter per rank, independent of DP). Three levers were
+needed:
 
 * ``override_ddp_config.grad_reduce_in_fp32=False`` (bf16 grad buffers); on
   80 GB GPUs stage 0 does not fit without it.
@@ -176,9 +180,9 @@ Three levers were needed:
   Megatron-LM's grad-norm kernels do not accept until
   https://github.com/NVIDIA/Megatron-LM/pull/7279 lands, and the quantized
   main-param branch builds non-leaf shards until
-  https://github.com/NVIDIA/Megatron-LM/pull/8245 lands; load runtime equivalents
-  through ``actor_rollout_ref.model.external_lib`` (``MCORE_COMPAT_LIB`` in the
-  launcher) in the meantime.
+  https://github.com/NVIDIA/Megatron-LM/pull/8245 lands. The Megatron engine
+  applies runtime equivalents of both (``verl/models/mcore/patch.py``;
+  ``VERL_MEGATRON_OPTIMIZER_COMPAT=0`` disables them).
 * ``optimizer_offload_fraction < 1`` keeps part of the Adam state on the GPU
   (fixed by https://github.com/verl-project/verl/pull/8286).
 
@@ -213,7 +217,8 @@ response budget before the curve moves.
 **Long runs.** On clusters with a wall-clock limit, run the job as a chain of
 segments with ``trainer.save_freq`` and ``trainer.resume_mode=auto``; each
 segment resumes from the newest ``global_step_*`` and the first step after a
-resume costs 1.5-2x a steady step (weight sync and kernel warm-up).
+resume costs 1.5-4x a steady step (initial weight sync plus every JIT the new
+job has to redo; ~2x on GB200, ~3.7x on H100).
 
 Measured on the two profiles (verl ``main``, Megatron-Bridge 0.6.2, vLLM 0.29.0):
 

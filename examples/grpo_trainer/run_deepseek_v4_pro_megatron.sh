@@ -20,9 +20,14 @@
 #   bf16 grad buffer (GRAD_REDUCE_IN_FP32=False) and the precision-aware optimizer are both required,
 #   otherwise the fp32 master shards are materialized on the GPU and stage 0 runs out of memory.
 # - The precision-aware optimizer produces mixed bf16/fp32 gradient groups on DSV4 (hc alpha/bias,
-#   ape, attn_sink are fp32).  Until https://github.com/NVIDIA/Megatron-LM/pull/7279 (dtype-safe grad
-#   norm) and https://github.com/NVIDIA/Megatron-LM/pull/8245 (no-grad fp32 main-param shards) are
-#   merged, load their runtime equivalents with MCORE_COMPAT_LIB=<module> (actor_rollout_ref.model.external_lib).
+#   ape, attn_sink are fp32) and the quantized params need no-grad fp32 main-param shards.  verl applies
+#   runtime equivalents of https://github.com/NVIDIA/Megatron-LM/pull/7279 and
+#   https://github.com/NVIDIA/Megatron-LM/pull/8245 in the Megatron engine until they are merged
+#   (VERL_MEGATRON_OPTIMIZER_COMPAT=0 disables them).
+# - Response length 8192 on 80 GB GPUs needs ACTOR_EP=16 (DP1): with EP8 stage 0 holds ~11.6 B params
+#   (46 GiB of bf16 params + grads) next to the ~17 GiB that vLLM keeps resident after sleep, and the
+#   first update_actor runs out of memory.  The same applies when loading from a Megatron
+#   dist-checkpoint (bf16 params) with DIST_CKPT_PATH.
 # - With all-CPU optimizer offload the host memory per node is set by the HybridDeviceOptimizer, not
 #   by DP: ~12 bytes per parameter of fp32 master + Adam state per rank.  Keep the Ray object store
 #   small (32 GiB) when starting the cluster, or it competes with the optimizer for host memory.
@@ -31,9 +36,11 @@
 #
 # Megatron-Bridge must be installed and importable on every node.
 #
-# With:
-# - Megatron-Bridge: https://github.com/NVIDIA-NeMo/Megatron-Bridge/commit/c7774d44d4b3101dc6bdf8c8d38a32e909e1ea11
-# - Megatron-LM: https://github.com/NVIDIA/Megatron-LM/commit/fd1121b8ff7e3a4f83a28d35aed172d7bc0260e1
+# Validated with:
+# - Megatron-Bridge 0.6.2 (https://github.com/NVIDIA-NeMo/Megatron-Bridge/commit/c0e164ed)
+# - Megatron-LM https://github.com/NVIDIA/Megatron-LM/commit/43e45e13 (the uv.lock still pins
+#   megatron-core core_v0.19.2, which has no DeepSeek-V4; see https://github.com/verl-project/verl/issues/6864)
+# - vLLM 0.29.0
 
 set -euo pipefail
 
@@ -101,11 +108,10 @@ OPTIMIZER_OFFLOAD_FRACTION=${OPTIMIZER_OFFLOAD_FRACTION:-1.0}
 # stage 0 (~11 B parameters per rank) fits at all.  Alignment is unchanged.
 GRAD_REDUCE_IN_FP32=${GRAD_REDUCE_IN_FP32:-False}
 # Megatron precision-aware optimizer: fp32 master shards live in the (offloaded) optimizer state
-# instead of on the GPU, main grads in bf16, Adam moments in fp32.  Needs MCORE_COMPAT_LIB until the
-# two Megatron-LM fixes named in the header are merged.
+# instead of on the GPU, main grads in bf16, Adam moments in fp32 (see the header for the two
+# Megatron-LM fixes verl applies at runtime).
 PRECISION_AWARE_OPTIMIZER=${PRECISION_AWARE_OPTIMIZER:-${_PRECISION_AWARE_OPTIMIZER}}
 MAIN_GRADS_DTYPE=${MAIN_GRADS_DTYPE:-bf16}
-MCORE_COMPAT_LIB=${MCORE_COMPAT_LIB:-}
 
 ACTOR_TP=${ACTOR_TP:-1}
 ACTOR_PP=${ACTOR_PP:-${_ACTOR_PP}}
@@ -124,7 +130,8 @@ REF_CP=${REF_CP:-${ACTOR_CP}}
 
 # Optional: load actor and ref from a Megatron dist-checkpoint instead of the HF checkpoint.  The
 # online HF -> Megatron load walks the whole task list on every rank; on nodes with few GPUs and a
-# large host-memory share per rank (GB200) the converted checkpoint is the safer start.
+# large host-memory share per rank (GB200) the converted checkpoint is the safer start.  The
+# checkpoint holds bf16 parameters, so on 80 GB GPUs combine it with ACTOR_EP=16 (see the header).
 DIST_CKPT_PATH=${DIST_CKPT_PATH:-}
 
 ROLLOUT_TP=${ROLLOUT_TP:-${_ROLLOUT_TP}}
@@ -141,7 +148,7 @@ ROLLOUT_UPDATE_WEIGHTS_BUCKET_MB=${ROLLOUT_UPDATE_WEIGHTS_BUCKET_MB:-512}
 # per step for 64 samples x 2048 tokens on GB200; FlashInfer TRT-LLM cannot be refitted and the
 # FlashInfer CUTLASS kernel is not selectable for a native DSV4 checkpoint.
 ROLLOUT_MOE_BACKEND=${ROLLOUT_MOE_BACKEND:-}
-ROUTER_REPLAY_MODE=${ROUTER_REPLAY_MODE:-R3}
+ROUTER_REPLAY_MODE=${ROUTER_REPLAY_MODE:-R3}   # disabled | R2 | R3; rollout routing replay is enabled only for R3
 
 ALL_OFFLOAD=${ALL_OFFLOAD:-True}
 TOTAL_EPOCHS=${TOTAL_EPOCHS:-1}
@@ -152,6 +159,7 @@ SAVE_CONTENTS=${SAVE_CONTENTS:-[model,extra]}
 TEST_FREQ=${TEST_FREQ:--1}
 NCCL_TIMEOUT=${NCCL_TIMEOUT:-${_NCCL_TIMEOUT}}
 
+LOGGER=${LOGGER:-'["console","wandb"]'}
 PROJECT_NAME=${PROJECT_NAME:-verl_dapo}
 EXPERIMENT_NAME=${EXPERIMENT_NAME:-deepseek_v4_pro_grpo_vllm_megatron_${HW}}
 CKPTS_DIR=${CKPTS_DIR:-"${HOME}/verl/ckpts/${PROJECT_NAME}/${EXPERIMENT_NAME}"}
@@ -191,9 +199,6 @@ MODEL=(
     actor_rollout_ref.model.use_remove_padding=True
     actor_rollout_ref.model.enable_gradient_checkpointing=True
 )
-if [ -n "${MCORE_COMPAT_LIB}" ]; then
-    MODEL+=(actor_rollout_ref.model.external_lib=${MCORE_COMPAT_LIB})
-fi
 
 ACTOR=(
     actor_rollout_ref.actor.optim.lr=${ACTOR_LR}
@@ -281,7 +286,7 @@ ROLLOUT=(
     actor_rollout_ref.rollout.gpu_memory_utilization=${ROLLOUT_GPU_MEM_UTIL}
     actor_rollout_ref.rollout.n=${ROLLOUT_N}
     actor_rollout_ref.rollout.calculate_log_probs=True
-    actor_rollout_ref.rollout.enable_rollout_routing_replay=True
+    actor_rollout_ref.rollout.enable_rollout_routing_replay=$([ "${ROUTER_REPLAY_MODE}" = "R3" ] && echo True || echo False)
     actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=True
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU}
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1
@@ -305,7 +310,7 @@ REWARD=(
 )
 
 TRAINER=(
-    trainer.logger='["console","wandb"]'
+    trainer.logger="${LOGGER}"
     trainer.project_name=${PROJECT_NAME}
     trainer.experiment_name=${EXPERIMENT_NAME}
     trainer.n_gpus_per_node=${NGPUS_PER_NODE}

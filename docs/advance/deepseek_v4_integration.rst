@@ -199,12 +199,16 @@ optimizer or 128 nodes (PP16 x EP32); otherwise the head node runs out of host
 memory during the save.
 
 **Rollout kernels.** verl defaults low-precision rollouts to DeepGEMM
-(``moe_backend=deep_gemm``). For a native DSV4 checkpoint the alternatives are
-Marlin (W4A16, 5-9 % faster per step for 64 samples x 2048 tokens on GB200,
-``ROLLOUT_MOE_BACKEND=marlin``) and nothing else: FlashInfer TRT-LLM cannot be
-refitted, and the FlashInfer CUTLASS MXFP4 kernel is not selectable for a native
-checkpoint (the CLI accepts only its BF16-activation variant, which rejects the
-MXFP4 weight scheme).
+(``moe_backend=deep_gemm``); the Pro launcher overrides the MoE kernel to Marlin
+(W4A16) on both profiles. vLLM 0.29's DeepGEMM MXFP4 kernel is SM100+ only, so on
+H100 every vLLM worker fails at ``load_model`` with the default, and on GB200 the
+same kernel died with an illegal memory access in vLLM's profiling run at 10,240
+batched tokens (prompt 2048 + response 8192); where it ran (3,072 batched tokens)
+it was 5-9 % slower per step than Marlin for 64 samples. The other MXFP4 kernels
+are not options for a native DSV4 checkpoint: FlashInfer TRT-LLM cannot be
+refitted, and the FlashInfer CUTLASS kernel is not selectable (the CLI accepts
+only its BF16-activation variant, which rejects the MXFP4 weight scheme). The
+dense FP8 layers keep verl's DeepGEMM default (``linear_backend=deep_gemm``).
 
 **What the reward means.** On DAPO-Math-17k the per-step
 ``critic/score/mean`` of Pro is almost exactly ``1 - 2 x clip_ratio``: in 192

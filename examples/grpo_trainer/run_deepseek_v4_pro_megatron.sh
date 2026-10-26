@@ -69,6 +69,7 @@ case "${HW}" in
         _MAX_RESPONSE_LENGTH=4096
         _PRECISION_AWARE_OPTIMIZER=True
         _NCCL_TIMEOUT=7200           # the first step of a PP32 model compiles kernels for a long time
+        _ROLLOUT_MOE_BACKEND=marlin  # vLLM 0.29's DeepGEMM MXFP4 kernel is SM100+ only; verl's default (deep_gemm) fails at load_model on Hopper
         ;;
     gb200)
         _NGPUS_PER_NODE=4
@@ -81,6 +82,7 @@ case "${HW}" in
         _MAX_RESPONSE_LENGTH=8192
         _PRECISION_AWARE_OPTIMIZER=False  # optional on 189 GB GPUs; True frees ~20 % host memory and lets 64 nodes save
         _NCCL_TIMEOUT=3600
+        _ROLLOUT_MOE_BACKEND=marlin  # DeepGEMM MXFP4 hit an illegal memory access in vLLM's profiling run at 10240 batched tokens; Marlin is also 5-9 % faster here
         ;;
     *)
         echo "ERROR: HW must be h100 or gb200, got '${HW}'" >&2
@@ -144,10 +146,13 @@ ROLLOUT_MAX_NUM_BATCHED_TOKENS=${ROLLOUT_MAX_NUM_BATCHED_TOKENS:-${PPO_MAX_TOKEN
 ROLLOUT_MAX_NUM_SEQS=${ROLLOUT_MAX_NUM_SEQS:-8}
 ROLLOUT_KV_CACHE_DTYPE=${ROLLOUT_KV_CACHE_DTYPE:-fp8}
 ROLLOUT_UPDATE_WEIGHTS_BUCKET_MB=${ROLLOUT_UPDATE_WEIGHTS_BUCKET_MB:-512}
-# Empty = verl's default (DeepGEMM for low-precision rollouts).  `marlin` (W4A16) was 5-9 % faster
-# per step for 64 samples x 2048 tokens on GB200; FlashInfer TRT-LLM cannot be refitted and the
-# FlashInfer CUTLASS kernel is not selectable for a native DSV4 checkpoint.
-ROLLOUT_MOE_BACKEND=${ROLLOUT_MOE_BACKEND:-}
+# MoE kernel for the MXFP4 routed experts.  Both profiles use Marlin (W4A16): verl's default for
+# low-precision rollouts is DeepGEMM, but vLLM 0.29's DeepGEMM MXFP4 kernel is SM100+ only (every
+# vLLM worker fails at load_model on H100) and on GB200 it died with an illegal memory access in the
+# profiling run at 10240 batched tokens; where it ran (3072 batched tokens) it was 5-9 % slower than
+# Marlin.  FlashInfer TRT-LLM cannot be refitted and the FlashInfer CUTLASS kernel is not selectable
+# for a native DSV4 checkpoint.  Set ROLLOUT_MOE_BACKEND=none to fall back to verl's default.
+ROLLOUT_MOE_BACKEND=${ROLLOUT_MOE_BACKEND:-${_ROLLOUT_MOE_BACKEND}}
 ROUTER_REPLAY_MODE=${ROUTER_REPLAY_MODE:-R3}   # disabled | R2 | R3; rollout routing replay is enabled only for R3
 
 ALL_OFFLOAD=${ALL_OFFLOAD:-True}
@@ -296,7 +301,7 @@ ROLLOUT=(
     actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=${ROLLOUT_UPDATE_WEIGHTS_BUCKET_MB}
     +actor_rollout_ref.rollout.engine_kwargs.vllm.kv_cache_dtype=${ROLLOUT_KV_CACHE_DTYPE}
 )
-if [ -n "${ROLLOUT_MOE_BACKEND}" ]; then
+if [ -n "${ROLLOUT_MOE_BACKEND}" ] && [ "${ROLLOUT_MOE_BACKEND}" != "none" ]; then
     ROLLOUT+=(+actor_rollout_ref.rollout.engine_kwargs.vllm.moe_backend=${ROLLOUT_MOE_BACKEND})
 fi
 

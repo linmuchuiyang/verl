@@ -17,6 +17,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 import torch.distributed as dist
 
@@ -87,13 +88,18 @@ def _fake_clip_grads(record):
     )
 
 
-def _ensure_single_rank_group(tmp_path):
-    if not dist.is_initialized():
+@pytest.fixture
+def single_rank_group(tmp_path):
+    """One-rank gloo group, destroyed afterwards only if created here (CPU tests share one pytest process)."""
+    created = not dist.is_initialized()
+    if created:
         dist.init_process_group(backend="gloo", init_method=f"file://{tmp_path / 'rdzv'}", rank=0, world_size=1)
+    yield
+    if created and dist.is_initialized():
+        dist.destroy_process_group()
 
 
-def test_dtype_safe_grad_norm_matches_full_norm_and_forwards_single_dtype(tmp_path):
-    _ensure_single_rank_group(tmp_path)
+def test_dtype_safe_grad_norm_matches_full_norm_and_forwards_single_dtype(single_rank_group):
     record = []
     cg = _fake_clip_grads(record)
     get_norm, _ = _PATCH.make_dtype_safe_grad_fns(cg)
@@ -108,8 +114,7 @@ def test_dtype_safe_grad_norm_matches_full_norm_and_forwards_single_dtype(tmp_pa
     assert abs(float(got_single) - torch.stack([t.norm() for t in fp32]).norm().item()) < 1e-5
 
 
-def test_dtype_safe_clip_scales_every_group(tmp_path):
-    _ensure_single_rank_group(tmp_path)
+def test_dtype_safe_clip_scales_every_group(single_rank_group):
     record = []
     cg = _fake_clip_grads(record)
     _, clip = _PATCH.make_dtype_safe_grad_fns(cg)

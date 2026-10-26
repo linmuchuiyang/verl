@@ -13,8 +13,8 @@
 #
 # Why Pro is not a scaled-up Flash:
 # - A Pro vLLM replica does not fit in one node, so the rollout uses cross-node data-parallel
-#   replicas.  This needs https://github.com/verl-project/verl/pull/8234 until it is merged
-#   (vLLM >= 0.29 rejects the headless engines verl starts on the other nodes without it).
+#   replicas.  This needs verl main at or after #8234 (merged 2026-10-26, 3dd97a0e): before it,
+#   vLLM >= 0.29 rejected the headless engines verl starts on the other nodes of a replica.
 # - DSV4 forces tensor_model_parallel_size=1 and verl requires rollout expert_parallel_size = TP x DP.
 # - Stage 0 of the pipeline holds the embedding and the three hash-routed layers; on 80 GB GPUs the
 #   bf16 grad buffer (GRAD_REDUCE_IN_FP32=False) and the precision-aware optimizer are both required,
@@ -31,8 +31,9 @@
 # - With all-CPU optimizer offload the host memory per node is set by the HybridDeviceOptimizer, not
 #   by DP: ~12 bytes per parameter of fp32 master + Adam state per rank.  Keep the Ray object store
 #   small (32 GiB) when starting the cluster, or it competes with the optimizer for host memory.
-# - Checkpoints default to save_contents=[model,extra]: the optimizer state of the 1.6 T model is
-#   ~22 TB, and resuming an offloaded optimizer needs https://github.com/verl-project/verl/pull/8235.
+# - Checkpoints default to save_contents=[model,extra] (load_contents follows it by default): the
+#   optimizer state of the 1.6 T model is ~22 TB, and resuming an offloaded optimizer needs verl main
+#   at or after #8235 (merged 2026-10-26, 0bd668c1).
 #
 # Megatron-Bridge must be installed and importable on every node.
 #
@@ -159,7 +160,7 @@ ALL_OFFLOAD=${ALL_OFFLOAD:-True}
 TOTAL_EPOCHS=${TOTAL_EPOCHS:-1}
 TOTAL_TRAINING_STEPS=${TOTAL_TRAINING_STEPS:-400}
 SAVE_FREQ=${SAVE_FREQ:--1}
-# [model,extra] only: the optimizer state is ~22 TB and resuming it with optimizer offload needs #8235.
+# [model,extra] only: the optimizer state is ~22 TB and resuming it with optimizer offload needs #8235 (merged).
 SAVE_CONTENTS=${SAVE_CONTENTS:-[model,extra]}
 TEST_FREQ=${TEST_FREQ:--1}
 NCCL_TIMEOUT=${NCCL_TIMEOUT:-${_NCCL_TIMEOUT}}

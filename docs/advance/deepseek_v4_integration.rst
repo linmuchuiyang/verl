@@ -1,7 +1,7 @@
 Adding DeepSeek V4 support
 ==========================
 
-Last updated: 10/23/2026.
+Last updated: 10/26/2026.
 
 This guide describes the DeepSeek-V4-Flash integration for a Megatron actor and
 a vLLM rollout model. Most of the model-specific work is at two boundaries:
@@ -157,9 +157,9 @@ must hold the embedding and the three hash-routed layers; Megatron-Bridge
 generates the layout for PP16, the PP32 layout is spelled out in the launcher.
 A vLLM replica of Pro does not fit in one node, so the rollout uses cross-node
 data-parallel replicas (TP8 x DP8 x EP64 on H100, TP1 x DP32 x EP32 on GB200)
-under verl's ``expert_parallel_size = TP x DP`` rule. Until
-https://github.com/verl-project/verl/pull/8234 is merged, vLLM 0.29 rejects the
-headless engines verl starts on the other nodes of a replica.
+under verl's ``expert_parallel_size = TP x DP`` rule. This needs verl ``main`` at or
+after #8234 (merged 2026-10-26): before it, vLLM 0.29 rejected the headless engines
+verl starts on the other nodes of a replica.
 
 **Memory.** With ``param_offload`` and ``optimizer_offload`` the GPU is rarely
 the constraint: the actor peaks at ~26 GB per H100 (response 4096, EP8; 77 GB
@@ -192,7 +192,7 @@ of 30 % of host memory competes with the optimizer.
 
 **Checkpoints.** ``save_contents=[model,extra]`` is the default of the launcher:
 the optimizer state of Pro is ~22 TB, and resuming an offloaded optimizer needs
-https://github.com/verl-project/verl/pull/8235. A model-only save is an HF
+verl ``main`` at or after #8235 (merged 2026-10-26). A model-only save is an HF
 export through Megatron-Bridge (~800 GB, ~30 min on 64 H100 nodes) or, when the
 actor was loaded with ``use_dist_checkpointing``, a bf16 Megatron
 dist-checkpoint (2.9 TB, ~40 s). On GB200 the save needs the precision-aware

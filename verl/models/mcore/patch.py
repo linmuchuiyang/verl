@@ -736,9 +736,18 @@ def wrap_no_grad(cls, name: str, marker: str) -> bool:
     Handles plain functions, classmethods and staticmethods.  Returns False when
     the attribute is missing or already wrapped (``marker`` set on ``cls``).
     """
+    import logging
+
     import torch
 
-    if getattr(cls, marker, False) or name not in cls.__dict__:
+    if getattr(cls, marker, False):
+        return False
+    if name not in cls.__dict__:
+        # Inherited (or renamed) upstream: nothing to wrap here.  Say so, because a silent skip would
+        # look like a successful patch to anyone reading the logs.
+        logging.getLogger(__name__).warning(
+            "%s.%s is not defined on the class itself (inherited or renamed); no-grad wrap skipped", cls.__name__, name
+        )
         return False
     raw = cls.__dict__[name]
     kind = type(raw) if isinstance(raw, (classmethod, staticmethod)) else None
@@ -767,7 +776,8 @@ def apply_distributed_optimizer_no_grad_main_params_patch() -> bool:
         DistributedOptimizer, "_build_model_and_main_param_groups", "_verl_no_grad_main_params_patch"
     )
     if applied:
-        logging.getLogger(__name__).info(
+        # WARNING on purpose: Ray workers do not surface INFO, and users need to see that the patch is live.
+        logging.getLogger(__name__).warning(
             "Patched DistributedOptimizer._build_model_and_main_param_groups to run under no_grad "
             "(Megatron-LM #8245: non-leaf fp32 main-param shards for quantized params)"
         )
@@ -802,7 +812,7 @@ def make_dtype_safe_grad_fns(cg):
         if len(groups) <= 1 or float(norm_type) != 2.0:
             return orig_norm(grads_for_norm, norm_type, grad_stats_parallel_group)
         if not announced["norm"]:
-            logger.info("dtype-safe grad norm active: groups=%s", {str(k): len(v) for k, v in groups.items()})
+            logger.warning("dtype-safe grad norm active: groups=%s", {str(k): len(v) for k, v in groups.items()})
             announced["norm"] = True
         data_parallel_group = None
         for g in grads_for_norm:
@@ -834,7 +844,7 @@ def make_dtype_safe_grad_fns(cg):
         if len(groups) <= 1:
             return orig_clip(parameters, max_norm, total_norm, use_decoupled_grad)
         if not announced["clip"]:
-            logger.info("dtype-safe grad clip active: groups=%s", {str(k): len(v) for k, v in groups.items()})
+            logger.warning("dtype-safe grad clip active: groups=%s", {str(k): len(v) for k, v in groups.items()})
             announced["clip"] = True
         clip_coeff = max_norm / (total_norm + 1.0e-6)
         if isinstance(clip_coeff, torch.Tensor):
@@ -876,7 +886,7 @@ def apply_dtype_safe_grad_norm_patch() -> bool:
     except ImportError:
         pass
     cg._verl_dtype_safe_grad_patch = True
-    logging.getLogger(__name__).info(
+    logging.getLogger(__name__).warning(
         "Installed dtype-safe get_grad_norm_fp32 / clip_grad_by_total_norm_fp32 (Megatron-LM #7279)"
     )
     return True

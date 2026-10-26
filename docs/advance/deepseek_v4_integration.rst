@@ -225,7 +225,7 @@ segment resumes from the newest ``global_step_*`` and the first step after a
 resume costs 1.5-4x a steady step (initial weight sync plus every JIT the new
 job has to redo; ~2x on GB200, ~3.7x on H100).
 
-Measured on the two profiles (verl ``main``, Megatron-Bridge 0.6.2, vLLM 0.29.0):
+Measured on the two profiles (verl ``main`` a4b9354 + #8234, Megatron-Bridge 0.6.2, vLLM 0.29.0, Marlin MoE kernels, R3, 3 GRPO steps each):
 
 .. list-table::
    :header-rows: 1
@@ -244,7 +244,7 @@ Measured on the two profiles (verl ``main``, Megatron-Bridge 0.6.2, vLLM 0.29.0)
      - 558 GB on the two pipeline-stage-0 nodes, 244-409 GB on the others (mean 383 GB)
    * - ``gb200`` (64 x 4 GB200, PP16 x EP16, rollout DP32)
      - 8192
-     - TBD-GB200
-     - TBD-GB200
-     - TBD-GB200
-     - TBD-GB200
+     - ~965 s (first step 1991 s)
+     - ~500 s / ~251 s
+     - 0.998
+     - 929 GB on the head node (stock optimizer; no headroom for a save at this shape, see Checkpoints)

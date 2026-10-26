@@ -56,22 +56,37 @@ from verl.utils.vllm.vllm_fp8_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _collect_strings(value: Any, values: list[str] | None = None) -> list[str]:
+    """Every string nested anywhere in a quantization config, lower-cased."""
+    if values is None:
+        values = []
+    if isinstance(value, Mapping):
+        for nested in value.values():
+            _collect_strings(nested, values)
+    elif isinstance(value, list | tuple):
+        for nested in value:
+            _collect_strings(nested, values)
+    elif isinstance(value, str):
+        values.append(value.lower())
+    return values
+
+
 def _is_nvfp4_quantization(quantization_config: Mapping[str, Any]) -> bool:
     """Whether a quantization config contains the NVFP4 format."""
-    values = []
+    return any("nvfp4" in value for value in _collect_strings(quantization_config))
 
-    def collect(value: Any) -> None:
-        if isinstance(value, Mapping):
-            for nested in value.values():
-                collect(nested)
-        elif isinstance(value, list | tuple):
-            for nested in value:
-                collect(nested)
-        elif isinstance(value, str):
-            values.append(value.lower())
 
-    collect(quantization_config)
-    return any("nvfp4" in value for value in values)
+def _has_mxfp4_experts(quantization_config: Mapping[str, Any], hf_config: Any = None) -> bool:
+    """Whether the routed experts are stored in MXFP4.
+
+    Native DeepSeek-V4 checkpoints keep only the FP8 block config under
+    ``quantization_config`` and declare the expert format separately as
+    ``expert_dtype: fp4``; compressed-tensors checkpoints name the scheme
+    inside ``quantization_config``.
+    """
+    if str(getattr(hf_config, "expert_dtype", None) or "").lower() in {"fp4", "mxfp4"}:
+        return True
+    return any("mxfp4" in value for value in _collect_strings(quantization_config))
 
 
 def _uses_fp32_block_scales(quantization_config: Mapping[str, Any]) -> bool:
@@ -93,16 +108,26 @@ def _is_hopper() -> bool:
 def set_default_vllm_quantization_backends(
     quantization_config: Mapping[str, Any] | None,
     engine_kwargs: dict[str, Any],
+    hf_config: Any = None,
 ) -> None:
-    """Default non-NVFP4 quantization backends to DeepGEMM."""
+    """Default non-NVFP4 quantization backends to DeepGEMM.
+
+    ``VERL_ROLLOUT_USE_DEEP_GEMM=0`` leaves every backend to vLLM's automatic
+    selection. MXFP4 routed experts keep vLLM's selection on Hopper, where vLLM
+    has no DeepGEMM MXFP4 kernel and picks Marlin, the refittable backend there;
+    forcing ``moe_backend=deep_gemm`` would fail at ``load_model``.
+    """
+    if os.getenv("VERL_ROLLOUT_USE_DEEP_GEMM", "1") == "0":
+        return
     if hasattr(quantization_config, "to_dict"):
         quantization_config = quantization_config.to_dict()
     if not isinstance(quantization_config, Mapping) or _is_nvfp4_quantization(quantization_config):
         return
-    for option in ("linear_backend", "moe_backend"):
-        engine_kwargs.setdefault(option, "deep_gemm")
+    engine_kwargs.setdefault("linear_backend", "deep_gemm")
+    if not (_is_hopper() and _has_mxfp4_experts(quantization_config, hf_config)):
+        engine_kwargs.setdefault("moe_backend", "deep_gemm")
     if (
-        "deep_gemm" in (engine_kwargs["linear_backend"], engine_kwargs["moe_backend"])
+        "deep_gemm" in (engine_kwargs["linear_backend"], engine_kwargs.get("moe_backend"))
         and _is_hopper()
         and _uses_fp32_block_scales(quantization_config)
     ):

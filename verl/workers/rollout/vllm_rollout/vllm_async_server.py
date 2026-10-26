@@ -322,7 +322,9 @@ class vLLMHttpServer:
         effective_quantization_config = hf_overrides.get("quantization_config") or hf_quantization_config
         from verl.utils.vllm.vllm_quant_utils import set_default_vllm_quantization_backends
 
-        set_default_vllm_quantization_backends(effective_quantization_config, engine_kwargs)
+        set_default_vllm_quantization_backends(
+            effective_quantization_config, engine_kwargs, hf_config=self.model_config.hf_config
+        )
 
         compilation_config = engine_kwargs.pop("compilation_config", None) or {}
         if isinstance(compilation_config, str):

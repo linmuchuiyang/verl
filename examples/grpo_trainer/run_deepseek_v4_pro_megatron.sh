@@ -31,9 +31,8 @@
 # - With all-CPU optimizer offload the host memory per node is set by the HybridDeviceOptimizer, not
 #   by DP: ~12 bytes per parameter of fp32 master + Adam state per rank.  Keep the Ray object store
 #   small (32 GiB) when starting the cluster, or it competes with the optimizer for host memory.
-# - Checkpoints default to save_contents=[model,extra] (load_contents follows it, so a resume asks only
-#   for what was saved): the optimizer state of the 1.6 T model is ~22 TB, and resuming an offloaded
-#   optimizer needs https://github.com/verl-project/verl/pull/8235.
+# - Checkpoints default to save_contents=[model,extra]: the optimizer state of the 1.6 T model is
+#   ~22 TB, and resuming an offloaded optimizer needs https://github.com/verl-project/verl/pull/8235.
 #
 # Megatron-Bridge must be installed and importable on every node.
 #
@@ -162,8 +161,6 @@ TOTAL_TRAINING_STEPS=${TOTAL_TRAINING_STEPS:-400}
 SAVE_FREQ=${SAVE_FREQ:--1}
 # [model,extra] only: the optimizer state is ~22 TB and resuming it with optimizer offload needs #8235.
 SAVE_CONTENTS=${SAVE_CONTENTS:-[model,extra]}
-# A resume (trainer.resume_mode=auto) must not ask for contents that were never saved.
-LOAD_CONTENTS=${LOAD_CONTENTS:-${SAVE_CONTENTS}}
 TEST_FREQ=${TEST_FREQ:--1}
 NCCL_TIMEOUT=${NCCL_TIMEOUT:-${_NCCL_TIMEOUT}}
 
@@ -218,7 +215,6 @@ ACTOR=(
     actor_rollout_ref.actor.use_dynamic_bsz=True
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU}
     actor_rollout_ref.actor.checkpoint.save_contents=${SAVE_CONTENTS}
-    actor_rollout_ref.actor.checkpoint.load_contents=${LOAD_CONTENTS}
     actor_rollout_ref.actor.megatron.tensor_model_parallel_size=${ACTOR_TP}
     actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=${ACTOR_PP}
     actor_rollout_ref.actor.megatron.virtual_pipeline_model_parallel_size=${ACTOR_VPP}

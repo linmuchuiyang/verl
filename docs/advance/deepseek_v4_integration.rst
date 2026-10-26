@@ -162,8 +162,9 @@ https://github.com/verl-project/verl/pull/8234 is merged, vLLM 0.29 rejects the
 headless engines verl starts on the other nodes of a replica.
 
 **Memory.** With ``param_offload`` and ``optimizer_offload`` the GPU is rarely
-the constraint: the actor peaks at ~26 GB per H100 (response 4096, EP8) and
-34-63 GB per GB200. The exception is response length 8192 on 80 GB GPUs, where
+the constraint: the actor peaks at ~26 GB per H100 (response 4096, EP8; 77 GB
+per GPU including the sleeping vLLM worker on the stage-0 nodes) and 34-63 GB
+per GB200. The exception is response length 8192 on 80 GB GPUs, where
 stage 0 (embedding plus the three hash layers, ~11.6 B parameters at EP8) does
 not fit next to the ~17 GiB vLLM keeps resident after sleep; ``ACTOR_EP=16``
 (DP1) halves it. The host is the usual limit, because Megatron's
@@ -237,10 +238,10 @@ Measured on the two profiles (verl ``main``, Megatron-Bridge 0.6.2, vLLM 0.29.0)
      - Host peak per node
    * - ``h100`` (64 x 8 H100, PP32 x EP8, rollout TP8 x DP8)
      - 4096
-     - TBD-H100
-     - TBD-H100
-     - TBD-H100
-     - TBD-H100
+     - ~690 s (first step 2585 s with JIT)
+     - ~280 s / ~235 s
+     - 0.998
+     - 558 GB on the two pipeline-stage-0 nodes, 244-409 GB on the others (mean 383 GB)
    * - ``gb200`` (64 x 4 GB200, PP16 x EP16, rollout DP32)
      - 8192
      - TBD-GB200

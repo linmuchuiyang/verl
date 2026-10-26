@@ -54,6 +54,7 @@ from verl.utils.vllm.vllm_fp8_utils import (
 )
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 def _collect_strings(value: Any, values: list[str] | None = None) -> list[str]:
@@ -118,14 +119,21 @@ def set_default_vllm_quantization_backends(
     forcing ``moe_backend=deep_gemm`` would fail at ``load_model``.
     """
     if os.getenv("VERL_ROLLOUT_USE_DEEP_GEMM", "1") == "0":
+        logger.info("VERL_ROLLOUT_USE_DEEP_GEMM=0: linear_backend and moe_backend are left to vLLM's selection")
         return
     if hasattr(quantization_config, "to_dict"):
         quantization_config = quantization_config.to_dict()
     if not isinstance(quantization_config, Mapping) or _is_nvfp4_quantization(quantization_config):
         return
     engine_kwargs.setdefault("linear_backend", "deep_gemm")
-    if not (_is_hopper() and _has_mxfp4_experts(quantization_config, hf_config)):
-        engine_kwargs.setdefault("moe_backend", "deep_gemm")
+    if "moe_backend" not in engine_kwargs:
+        if _is_hopper() and _has_mxfp4_experts(quantization_config, hf_config):
+            logger.info(
+                "MXFP4 routed experts on Hopper: moe_backend is left to vLLM's automatic selection "
+                "(vLLM's DeepGEMM MXFP4 kernel needs SM100; Marlin is the refittable backend here)"
+            )
+        else:
+            engine_kwargs["moe_backend"] = "deep_gemm"
     if (
         "deep_gemm" in (engine_kwargs["linear_backend"], engine_kwargs.get("moe_backend"))
         and _is_hopper()

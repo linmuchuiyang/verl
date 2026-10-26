@@ -99,9 +99,11 @@ def defaults(quant_utils, monkeypatch):
 
 
 @pytest.mark.parametrize("quantization_config, hf_config", [(_DSV4_QUANT, _DSV4_HF), (_CT_MXFP4_QUANT, None)])
-def test_mxfp4_experts_keep_vllm_moe_selection_on_hopper(defaults, quantization_config, hf_config):
-    kwargs = defaults(quantization_config, hf_config, hopper=True)
+def test_mxfp4_experts_keep_vllm_moe_selection_on_hopper(defaults, quantization_config, hf_config, caplog):
+    with caplog.at_level("INFO"):
+        kwargs = defaults(quantization_config, hf_config, hopper=True)
     assert kwargs == {"linear_backend": "deep_gemm"}  # no moe_backend: vLLM picks Marlin on SM90
+    assert any("left to vLLM" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.parametrize("quantization_config, hf_config", [(_DSV4_QUANT, _DSV4_HF), (_CT_MXFP4_QUANT, None)])

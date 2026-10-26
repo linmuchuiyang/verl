@@ -81,11 +81,16 @@ def _has_mxfp4_experts(quantization_config: Mapping[str, Any], hf_config: Any = 
     """Whether the routed experts are stored in MXFP4.
 
     Native DeepSeek-V4 checkpoints keep only the FP8 block config under
-    ``quantization_config`` and declare the expert format separately as
-    ``expert_dtype: fp4``; compressed-tensors checkpoints name the scheme
-    inside ``quantization_config``.
+    ``quantization_config`` and declare the expert format as ``expert_dtype``
+    (top-level in V4, inside ``quantization_config`` in V4.1); the ``-Base``
+    checkpoints say ``fp8`` there and keep DeepGEMM on every architecture.
+    Compressed-tensors checkpoints name the scheme inside ``quantization_config``.
     """
-    if str(getattr(hf_config, "expert_dtype", None) or "").lower() in {"fp4", "mxfp4"}:
+    expert_dtypes = (
+        getattr(hf_config, "expert_dtype", None),
+        quantization_config.get("expert_dtype"),  # DeepSeek-V4.1 nests it under quantization_config
+    )
+    if any(str(dtype or "").lower() in {"fp4", "mxfp4"} for dtype in expert_dtypes):
         return True
     return any("mxfp4" in value for value in _collect_strings(quantization_config))
 

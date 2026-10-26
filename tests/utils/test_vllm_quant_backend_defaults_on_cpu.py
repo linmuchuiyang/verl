@@ -30,6 +30,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # Native DeepSeek-V4 checkpoint: FP8 block config at the top level, experts declared on the model config.
 _DSV4_QUANT = {"quant_method": "fp8", "fmt": "e4m3", "weight_block_size": [128, 128], "activation_scheme": "dynamic"}
 _DSV4_HF = SimpleNamespace(model_type="deepseek_v4", expert_dtype="fp4")
+# DeepSeek-V4.1 nests the expert format inside quantization_config; the -Base checkpoints have FP8 experts.
+_DSV41_QUANT = {"quant_method": "fp8", "weight_block_size": [32, 32], "scale_fmt": "ue8m0", "expert_dtype": "fp4"}
+_DSV4_BASE_HF = SimpleNamespace(model_type="deepseek_v4", expert_dtype="fp8")
 # compressed-tensors MXFP4 experts name the scheme inside the quantization config.
 _CT_MXFP4_QUANT = {
     "quant_method": "compressed-tensors",
@@ -98,7 +101,9 @@ def defaults(quant_utils, monkeypatch):
     return run
 
 
-@pytest.mark.parametrize("quantization_config, hf_config", [(_DSV4_QUANT, _DSV4_HF), (_CT_MXFP4_QUANT, None)])
+@pytest.mark.parametrize(
+    "quantization_config, hf_config", [(_DSV4_QUANT, _DSV4_HF), (_DSV41_QUANT, None), (_CT_MXFP4_QUANT, None)]
+)
 def test_mxfp4_experts_keep_vllm_moe_selection_on_hopper(defaults, quantization_config, hf_config, caplog):
     with caplog.at_level("INFO"):
         kwargs = defaults(quantization_config, hf_config, hopper=True)
@@ -113,8 +118,9 @@ def test_mxfp4_experts_default_to_deep_gemm_on_blackwell(defaults, quantization_
 
 
 @pytest.mark.parametrize("hopper", [True, False])
-def test_fp8_moe_still_defaults_to_deep_gemm(defaults, hopper):
-    kwargs = defaults(_FP8_QUANT, SimpleNamespace(model_type="deepseek_v3"), hopper=hopper)
+@pytest.mark.parametrize("hf_config", [SimpleNamespace(model_type="deepseek_v3"), _DSV4_BASE_HF])
+def test_fp8_moe_still_defaults_to_deep_gemm(defaults, hopper, hf_config):
+    kwargs = defaults(_FP8_QUANT, hf_config, hopper=hopper)
     assert kwargs == {"linear_backend": "deep_gemm", "moe_backend": "deep_gemm"}
 
 

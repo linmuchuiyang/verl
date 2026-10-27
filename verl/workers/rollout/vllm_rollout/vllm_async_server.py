@@ -322,8 +322,12 @@ class vLLMHttpServer:
         effective_quantization_config = hf_overrides.get("quantization_config") or hf_quantization_config
         from verl.utils.vllm.vllm_quant_utils import set_default_vllm_quantization_backends
 
+        # The checkpoint's own expert format only matters when the rollout keeps the checkpoint's
+        # quantization; a rollout quantization override requantizes the experts as well.
         set_default_vllm_quantization_backends(
-            effective_quantization_config, engine_kwargs, hf_config=self.model_config.hf_config
+            effective_quantization_config,
+            engine_kwargs,
+            hf_config=None if hf_overrides.get("quantization_config") else self.model_config.hf_config,
         )
 
         compilation_config = engine_kwargs.pop("compilation_config", None) or {}

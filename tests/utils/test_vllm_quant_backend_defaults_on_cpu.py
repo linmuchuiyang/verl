@@ -136,9 +136,20 @@ def test_nvfp4_and_unquantized_are_untouched(defaults):
 
 
 def test_opt_out_env_leaves_everything_to_vllm(defaults, monkeypatch):
+    import os
+
     monkeypatch.setenv("VERL_ROLLOUT_USE_DEEP_GEMM", "0")
     assert defaults(_FP8_QUANT, None, hopper=False) == {}
+    assert os.environ.get("VLLM_USE_DEEP_GEMM_E8M0") is None
     assert defaults(_DSV4_QUANT, _DSV4_HF, hopper=True, moe_backend="marlin") == {"moe_backend": "marlin"}
+    # vLLM may still pick DeepGEMM for the FP8 linear layers, so Hopper FP32 block scales keep the E8M0 override.
+    assert os.environ.get("VLLM_USE_DEEP_GEMM_E8M0") == "0"
+
+
+def test_rollout_quantization_override_ignores_checkpoint_expert_dtype(defaults):
+    # launch_server passes hf_config=None when a rollout quantization override is active: the effective
+    # FP8 block config then also covers the experts, so Hopper keeps DeepGEMM for the MoE.
+    assert defaults(_FP8_QUANT, None, hopper=True) == {"linear_backend": "deep_gemm", "moe_backend": "deep_gemm"}
 
 
 def test_hopper_fp32_block_scales_disable_e8m0(defaults, monkeypatch):

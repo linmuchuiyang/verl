@@ -121,29 +121,36 @@ def set_default_vllm_quantization_backends(
     ``VERL_ROLLOUT_USE_DEEP_GEMM=0`` leaves every backend to vLLM's automatic
     selection. MXFP4 routed experts keep vLLM's selection on Hopper, where vLLM
     has no DeepGEMM MXFP4 kernel and picks Marlin, the refittable backend there;
-    forcing ``moe_backend=deep_gemm`` would fail at ``load_model``.
+    forcing ``moe_backend=deep_gemm`` would fail at ``load_model``. Pass
+    ``hf_config`` only when ``quantization_config`` is the checkpoint's own: a
+    rollout quantization override requantizes the experts as well.
+
+    On Hopper, FP8 block checkpoints with FP32 scales always disable DeepGEMM's
+    E8M0 mode when DeepGEMM may run, whether verl set it, the user set it or
+    vLLM's own selection may pick it.
     """
-    if os.getenv("VERL_ROLLOUT_USE_DEEP_GEMM", "1") == "0":
-        logger.info("VERL_ROLLOUT_USE_DEEP_GEMM=0: linear_backend and moe_backend are left to vLLM's selection")
-        return
     if hasattr(quantization_config, "to_dict"):
         quantization_config = quantization_config.to_dict()
     if not isinstance(quantization_config, Mapping) or _is_nvfp4_quantization(quantization_config):
         return
-    engine_kwargs.setdefault("linear_backend", "deep_gemm")
-    if "moe_backend" not in engine_kwargs:
-        if _is_hopper() and _has_mxfp4_experts(quantization_config, hf_config):
-            logger.info(
-                "MXFP4 routed experts on Hopper: moe_backend is left to vLLM's automatic selection "
-                "(vLLM's DeepGEMM MXFP4 kernel needs SM100; Marlin is the refittable backend here)"
-            )
-        else:
-            engine_kwargs["moe_backend"] = "deep_gemm"
-    if (
-        "deep_gemm" in (engine_kwargs["linear_backend"], engine_kwargs.get("moe_backend"))
-        and _is_hopper()
-        and _uses_fp32_block_scales(quantization_config)
-    ):
+    opt_out = os.getenv("VERL_ROLLOUT_USE_DEEP_GEMM", "1") == "0"
+    if opt_out:
+        logger.info("VERL_ROLLOUT_USE_DEEP_GEMM=0: linear_backend and moe_backend are left to vLLM's selection")
+    else:
+        engine_kwargs.setdefault("linear_backend", "deep_gemm")
+        if "moe_backend" not in engine_kwargs:
+            if _is_hopper() and _has_mxfp4_experts(quantization_config, hf_config):
+                logger.info(
+                    "MXFP4 routed experts on Hopper: moe_backend is left to vLLM's automatic selection "
+                    "(vLLM's DeepGEMM MXFP4 kernel needs SM100; Marlin is the refittable backend here)"
+                )
+            else:
+                engine_kwargs["moe_backend"] = "deep_gemm"
+    deep_gemm_possible = opt_out or "deep_gemm" in (
+        engine_kwargs.get("linear_backend"),
+        engine_kwargs.get("moe_backend"),
+    )
+    if deep_gemm_possible and _is_hopper() and _uses_fp32_block_scales(quantization_config):
         os.environ["VLLM_USE_DEEP_GEMM_E8M0"] = "0"
 
 

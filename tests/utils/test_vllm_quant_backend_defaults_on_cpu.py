@@ -146,10 +146,32 @@ def test_opt_out_env_leaves_everything_to_vllm(defaults, monkeypatch):
     assert os.environ.get("VLLM_USE_DEEP_GEMM_E8M0") == "0"
 
 
-def test_rollout_quantization_override_ignores_checkpoint_expert_dtype(defaults):
-    # launch_server passes hf_config=None when a rollout quantization override is active: the effective
-    # FP8 block config then also covers the experts, so Hopper keeps DeepGEMM for the MoE.
-    assert defaults(_FP8_QUANT, None, hopper=True) == {"linear_backend": "deep_gemm", "moe_backend": "deep_gemm"}
+def test_rollout_quantization_override_ignores_checkpoint_expert_dtype(quant_utils, defaults):
+    # A rollout quantization override requantizes the experts too, so launch_server must not forward the
+    # checkpoint's expert_dtype; the effective FP8 block config then keeps DeepGEMM for the MoE on Hopper.
+    pick = quant_utils.checkpoint_hf_config_for_backend_defaults
+    assert pick({"quantization_config": _FP8_QUANT}, _DSV4_HF) is None
+    assert pick({}, _DSV4_HF) is _DSV4_HF
+    assert pick(None, _DSV4_HF) is _DSV4_HF
+    assert defaults(_FP8_QUANT, pick({"quantization_config": _FP8_QUANT}, _DSV4_HF), hopper=True) == {
+        "linear_backend": "deep_gemm",
+        "moe_backend": "deep_gemm",
+    }
+
+
+def test_explicit_auto_linear_backend_keeps_hopper_e8m0_override(defaults):
+    import os
+
+    kwargs = defaults(_DSV4_QUANT, _DSV4_HF, hopper=True, linear_backend="auto")
+    assert kwargs == {"linear_backend": "auto"}  # vLLM may still pick DeepGEMM for the FP8 linear layers
+    assert os.environ.get("VLLM_USE_DEEP_GEMM_E8M0") == "0"
+
+
+def test_explicit_non_deepgemm_backends_skip_the_e8m0_override(defaults):
+    import os
+
+    defaults(_DSV4_QUANT, _DSV4_HF, hopper=True, linear_backend="flashinfer", moe_backend="marlin")
+    assert os.environ.get("VLLM_USE_DEEP_GEMM_E8M0") is None
 
 
 def test_hopper_fp32_block_scales_disable_e8m0(defaults, monkeypatch):

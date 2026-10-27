@@ -111,6 +111,18 @@ def _is_hopper() -> bool:
     return current_platform.is_device_capability(90)
 
 
+def checkpoint_hf_config_for_backend_defaults(hf_overrides: Mapping[str, Any] | None, hf_config: Any) -> Any:
+    """The ``hf_config`` to hand to :func:`set_default_vllm_quantization_backends`.
+
+    The checkpoint's own expert format only matters when the rollout keeps the
+    checkpoint's quantization; a rollout quantization override (``hf_overrides``
+    carrying a ``quantization_config``) requantizes the experts as well.
+    """
+    if hf_overrides and hf_overrides.get("quantization_config"):
+        return None
+    return hf_config
+
+
 def set_default_vllm_quantization_backends(
     quantization_config: Mapping[str, Any] | None,
     engine_kwargs: dict[str, Any],
@@ -146,9 +158,9 @@ def set_default_vllm_quantization_backends(
                 )
             else:
                 engine_kwargs["moe_backend"] = "deep_gemm"
-    deep_gemm_possible = opt_out or "deep_gemm" in (
-        engine_kwargs.get("linear_backend"),
-        engine_kwargs.get("moe_backend"),
+    # DeepGEMM may run when verl or the user named it, or when a backend is unset / "auto" and vLLM picks it.
+    deep_gemm_possible = any(
+        engine_kwargs.get(option) in (None, "auto", "deep_gemm") for option in ("linear_backend", "moe_backend")
     )
     if deep_gemm_possible and _is_hopper() and _uses_fp32_block_scales(quantization_config):
         os.environ["VLLM_USE_DEEP_GEMM_E8M0"] = "0"
